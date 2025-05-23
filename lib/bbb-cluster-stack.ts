@@ -1,4 +1,3 @@
-// lib/bbb-cluster-stack.ts
 import { Stack, StackProps } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import {
@@ -12,7 +11,7 @@ import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
 
 export interface BbbClusterStackProps extends StackProps {
   readonly vpc: IVpc;
-  readonly scaleliteEndpoint: string; // e.g. "https://bbb.example.com"
+  readonly scaleliteEndpoint: string;
   readonly sharedSecret: Secret;
   readonly keyName?: string;
 }
