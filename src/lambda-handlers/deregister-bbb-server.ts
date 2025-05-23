@@ -134,6 +134,10 @@ export const handler = async (event: any): Promise<void> => {
 
 
         // 3. Call Scalelite `getServers` API to find the internal Scalelite ID
+        // Note: As of the current understanding, Scalelite's getServers API does not support
+        // filtering by specific serverId or URL directly in the API call.
+        // Therefore, all servers are fetched and filtered client-side.
+        // If server-side filtering becomes available, this should be updated for efficiency.
         console.info(`Calling Scalelite getServers API to find internal ID for server URL: ${bbbServerApiUrl}`);
         const getServersQueryString = getSortedQueryString({}); // No specific query params for getServers other than checksum
         const getServersChecksum = calculateChecksum(GET_SERVERS_ACTION, getServersQueryString, "", sharedSecret);
@@ -170,30 +174,49 @@ export const handler = async (event: any): Promise<void> => {
             const deleteChecksum = calculateChecksum(DELETE_SERVER_ACTION, deleteServerQueryString, deleteBodyString, sharedSecret);
             const deleteUrl = `${SCALELITE_API_BASE_URL}/${DELETE_SERVER_ACTION}?${deleteServerQueryString ? deleteServerQueryString + '&' : ''}checksum=${deleteChecksum}`;
             
-            console.info(`Calling Scalelite deleteServer API URL: ${deleteUrl} with body: ${deleteBodyString}`);
-            const deleteServerResponse = await httpClient.post(deleteUrl, deletePayload, {
-                headers: { 'Content-Type': 'application/json' }
-            });
-            console.info(`deleteServer response status: ${deleteServerResponse.status}, data: ${JSON.stringify(deleteServerResponse.data)}`);
+            console.info(`Preparing to call deleteServer for Scalelite internal ID: ${scaleliteInternalServerId}`);
+            const deletePayload = { id: scaleliteInternalServerId };
+            const deleteBodyString = JSON.stringify(deletePayload);
+            const deleteServerQueryString = getSortedQueryString({}); // No specific query params for deleteServer other than checksum
+            
+            const deleteChecksum = calculateChecksum(DELETE_SERVER_ACTION, deleteServerQueryString, deleteBodyString, sharedSecret);
+            const deleteUrl = `${SCALELITE_API_BASE_URL}/${DELETE_SERVER_ACTION}?${deleteServerQueryString ? deleteServerQueryString + '&' : ''}checksum=${deleteChecksum}`;
+            
+            try {
+                console.info(`Calling Scalelite deleteServer API URL: ${deleteUrl} with body: ${deleteBodyString}`);
+                const deleteServerResponse = await httpClient.post(deleteUrl, deletePayload, {
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                console.info(`deleteServer response status: ${deleteServerResponse.status}, data: ${JSON.stringify(deleteServerResponse.data)}`);
 
-            // Scalelite's JSON API for deleteServer typically returns { "status": "ok", "message": "ok" } on success
-            if (deleteServerResponse.status === 200 && deleteServerResponse.data.status === 'ok') {
-                console.info(`Successfully deregistered Scalelite internal ID ${scaleliteInternalServerId} from Scalelite.`);
-                lifecycleActionResult = 'CONTINUE';
-            } else if (deleteServerResponse.status === 200 && typeof deleteServerResponse.data === 'string' && deleteServerResponse.data.includes('<returncode>SUCCESS</returncode>')) {
-                // Fallback for older XML-like responses if Content-Type was not strictly application/json by Scalelite
-                console.info(`Successfully deregistered Scalelite internal ID ${scaleliteInternalServerId} from Scalelite (XML success).`);
-                lifecycleActionResult = 'CONTINUE';
-            }
-            else {
-                console.error(`Scalelite deleteServer API did not report success for ID ${scaleliteInternalServerId}. Status: ${deleteServerResponse.status}, Response: ${JSON.stringify(deleteServerResponse.data)}`);
-                // Keep lifecycleActionResult as 'ABANDON'
+                // Scalelite's JSON API for deleteServer typically returns { "status": "ok", "message": "ok" } on success
+                if (deleteServerResponse.status === 200 && deleteServerResponse.data.status === 'ok') {
+                    console.info(`Successfully deregistered Scalelite internal ID ${scaleliteInternalServerId} from Scalelite.`);
+                    lifecycleActionResult = 'CONTINUE';
+                } else if (deleteServerResponse.status === 200 && typeof deleteServerResponse.data === 'string' && deleteServerResponse.data.includes('<returncode>SUCCESS</returncode>')) {
+                    // Fallback for older XML-like responses if Content-Type was not strictly application/json by Scalelite
+                    console.info(`Successfully deregistered Scalelite internal ID ${scaleliteInternalServerId} from Scalelite (XML success).`);
+                    lifecycleActionResult = 'CONTINUE';
+                } else {
+                    console.error(`Scalelite deleteServer API did not report success for ID ${scaleliteInternalServerId}. Status: ${deleteServerResponse.status}, Response: ${JSON.stringify(deleteServerResponse.data)}`);
+                    // lifecycleActionResult remains 'ABANDON' by default
+                }
+            } catch (deleteError: any) {
+                if (axios.isAxiosError(deleteError) && deleteError.response?.status === 404) {
+                    console.warn(`Scalelite deleteServer API returned 404 for ID ${scaleliteInternalServerId}. Assuming server already deleted or never existed.`);
+                    lifecycleActionResult = 'CONTINUE';
+                } else {
+                    // For other errors (e.g., network issues, 500 errors from Scalelite),
+                    // let the main error handler catch it and ABANDON.
+                    console.error(`Error during Scalelite deleteServer API call for ID ${scaleliteInternalServerId}: ${deleteError.message}`, deleteError.stack);
+                    throw deleteError; // Re-throw to be caught by the main try-catch block
+                }
             }
         }
 
     } catch (error: any) {
         console.error(`An error occurred during the deregistration process: ${error.message}`, error.stack);
-        // lifecycleActionResult remains 'ABANDON'
+        // lifecycleActionResult remains 'ABANDON' due to error
     } finally {
         console.info(`Completing lifecycle action with result: ${lifecycleActionResult}`);
         const completeLifecycleParams = {
