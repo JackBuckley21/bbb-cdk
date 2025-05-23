@@ -1,4 +1,3 @@
-// lib/database-stack.ts
 import { Stack, StackProps } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import {
