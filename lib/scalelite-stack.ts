@@ -1,9 +1,12 @@
-import { Stack, StackProps, RemovalPolicy } from 'aws-cdk-lib';
+import { Stack, StackProps, RemovalPolicy, Duration } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import {
     IVpc, SecurityGroup, Peer, Port, SubnetType
 } from 'aws-cdk-lib/aws-ec2';
 import * as efs from 'aws-cdk-lib/aws-efs';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+// aws-sns and aws-cloudwatch-actions will not be used directly in this file for adding actions to these alarms
+// as the actions will be added in bin/bbb-cdk.ts to break circular dependency.
 import {
     Cluster, FargateService, FargateTaskDefinition, ContainerImage, Volume, EfsVolumeConfiguration
 } from 'aws-cdk-lib/aws-ecs';
@@ -29,6 +32,13 @@ export interface ScaleliteStackProps extends StackProps {
 
 export class ScaleliteStack extends Stack {
     public readonly apiEndpoint: string;
+    public readonly scaleliteAlb5xxErrorsAlarm: cloudwatch.Alarm;
+    public readonly scaleliteServiceHighCPUAlarm: cloudwatch.Alarm;
+    public readonly scaleliteServiceHighMemoryAlarm: cloudwatch.Alarm;
+    // Reference to the ALB and ECS Service if needed for metric creation outside, though direct metric methods are preferred.
+    public readonly loadBalancer: ApplicationLoadBalancer;
+    public readonly service: FargateService;
+
 
     constructor(scope: Construct, id: string, props: ScaleliteStackProps) {
         super(scope, id, props);
@@ -124,7 +134,7 @@ export class ScaleliteStack extends Stack {
         });
 
 
-        const service = new FargateService(this, 'ScaleliteService', {
+        this.service = new FargateService(this, 'ScaleliteService', {
             cluster,
             taskDefinition: taskDef,
             desiredCount: 2,
@@ -134,13 +144,13 @@ export class ScaleliteStack extends Stack {
         });
 
 
-        const lb = new ApplicationLoadBalancer(this, 'ScaleliteALB', {
+        this.loadBalancer = new ApplicationLoadBalancer(this, 'ScaleliteALB', {
             vpc: props.vpc,
             internetFacing: true,
             securityGroup: scaleliteSg
         });
         const cert = Certificate.fromCertificateArn(this, 'ACMCert', props.certificateArn);
-        const listener = lb.addListener('HttpsListener', {
+        const listener = this.loadBalancer.addListener('HttpsListener', {
             port: 443,
             certificates: [cert],
             protocol: ApplicationProtocol.HTTPS,
@@ -209,11 +219,61 @@ export class ScaleliteStack extends Stack {
         });
 
         new wafv2.CfnWebACLAssociation(this, 'ScaleliteWebACLAssociation', {
-            resourceArn: lb.loadBalancerArn,
+            resourceArn: this.loadBalancer.loadBalancerArn,
             webAclArn: webAcl.attrArn
         });
 
 
         this.apiEndpoint = `https://${subdomain}.${props.domainName}`;
+
+        // --- Critical Alarms Setup (actions to be added in bin/bbb-cdk.ts) ---
+
+        // 1. Scalelite ALB 5xx Errors Alarm
+        this.scaleliteAlb5xxErrorsAlarm = new cloudwatch.Alarm(this, 'ScaleliteALB5xxErrorsAlarm', {
+            alarmName: 'ScaleliteALB5xxErrorsAlarm',
+            alarmDescription: 'Triggers if the Scalelite ALB experiences >= 5 HTTP 5xx errors in 5 minutes.',
+            metric: this.loadBalancer.metricHttpCodeElb(cloudwatch.HttpCodeElb.ELB_5XX_COUNT, {
+                period: Duration.minutes(5),
+                statistic: cloudwatch.Statistic.SUM,
+            }),
+            threshold: 5,
+            evaluationPeriods: 1,
+            comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        });
+
+        // 2. Scalelite ECS Fargate Service CPU Utilization Alarm
+        this.scaleliteServiceHighCPUAlarm = new cloudwatch.Alarm(this, 'ScaleliteServiceHighCPUAlarm', {
+            alarmName: 'ScaleliteServiceHighCPUAlarm',
+            alarmDescription: 'Triggers if the Scalelite Fargate service average CPU utilization exceeds 85% for 15 minutes.',
+            metric: this.service.metricCpuUtilization({
+                period: Duration.minutes(5),
+                statistic: cloudwatch.Statistic.AVERAGE,
+            }),
+            threshold: 85,
+            evaluationPeriods: 3, // 3 * 5 minutes = 15 minutes
+            comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        });
+
+        // 3. Scalelite ECS Fargate Service Memory Utilization Alarm
+        this.scaleliteServiceHighMemoryAlarm = new cloudwatch.Alarm(this, 'ScaleliteServiceHighMemoryAlarm', {
+            alarmName: 'ScaleliteServiceHighMemoryAlarm',
+            alarmDescription: 'Triggers if the Scalelite Fargate service average memory utilization exceeds 85% for 15 minutes.',
+            metric: this.service.metricMemoryUtilization({
+                period: Duration.minutes(5),
+                statistic: cloudwatch.Statistic.AVERAGE,
+            }),
+            threshold: 85,
+            evaluationPeriods: 3, // 3 * 5 minutes = 15 minutes
+            comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        });
+
+        // Recommendation for Application-Level Metrics:
+        // Consider implementing application-level metrics for Scalelite.
+        // This could include API error rates (non-5xx), specific API endpoint latencies,
+        // or queue depths if applicable.
+        // These custom metrics can be published to CloudWatch and alarmed upon for deeper operational insights.
     }
 }
