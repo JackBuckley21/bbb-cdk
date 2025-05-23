@@ -14,11 +14,13 @@ import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
 
 export interface DatabaseStackProps extends StackProps {
     readonly vpc: IVpc;
+    readonly redisInstanceType?: string;
 }
 
 export class DatabaseStack extends Stack {
     public readonly dbCluster: DatabaseCluster;
     public readonly redisEndpoint: string;
+    public readonly redisSg: SecurityGroup;
     public readonly sharedSecret: Secret;
 
     constructor(scope: Construct, id: string, props: DatabaseStackProps) {
@@ -51,23 +53,19 @@ export class DatabaseStack extends Stack {
             cacheSubnetGroupName: 'scalelite-redis-subnets'
         });
 
-        const redisSg = new SecurityGroup(this, 'RedisSG', {
+        this.redisSg = new SecurityGroup(this, 'RedisSG', {
             vpc: props.vpc,
-            description: 'Allow Redis access within VPC',
+            description: 'Security Group for Scalelite Redis',
             allowAllOutbound: true
         });
-        redisSg.addIngressRule(
-            Peer.ipv4(props.vpc.vpcCidrBlock),
-            Port.tcp(6379),
-            'Allow Redis traffic inside VPC'
-        );
+        // Ingress rule will be added by ScaleliteStack
 
         const redis = new CfnCacheCluster(this, 'ScaleliteRedis', {
             engine: 'redis',
-            cacheNodeType: 'cache.t3.micro',
+            cacheNodeType: props.redisInstanceType || 'cache.t3.micro',
             numCacheNodes: 1,
             cacheSubnetGroupName: subnetGroup.cacheSubnetGroupName,
-            vpcSecurityGroupIds: [redisSg.securityGroupId]
+            vpcSecurityGroupIds: [this.redisSg.securityGroupId]
         });
 
         this.redisEndpoint = redis.attrRedisEndpointAddress;
