@@ -10,9 +10,7 @@ import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import {
     Cluster, FargateService, FargateTaskDefinition, ContainerImage, Volume, EfsVolumeConfiguration
 } from 'aws-cdk-lib/aws-ecs';
-import {
-    ApplicationLoadBalancer, ApplicationProtocol
-} from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2'; // Changed to namespace import
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { HostedZone, ARecord, RecordTarget } from 'aws-cdk-lib/aws-route53';
 import { LoadBalancerTarget } from 'aws-cdk-lib/aws-route53-targets';
@@ -36,7 +34,7 @@ export class ScaleliteStack extends Stack {
     public readonly scaleliteServiceHighCPUAlarm: cloudwatch.Alarm;
     public readonly scaleliteServiceHighMemoryAlarm: cloudwatch.Alarm;
     // Reference to the ALB and ECS Service if needed for metric creation outside, though direct metric methods are preferred.
-    public readonly loadBalancer: ApplicationLoadBalancer;
+    public readonly loadBalancer: elbv2.ApplicationLoadBalancer; // Adjusted type due to import change
     public readonly service: FargateService;
 
 
@@ -144,16 +142,16 @@ export class ScaleliteStack extends Stack {
         });
 
 
-        this.loadBalancer = new ApplicationLoadBalancer(this, 'ScaleliteALB', {
+        this.loadBalancer = new elbv2.ApplicationLoadBalancer(this, 'ScaleliteALB', { // Adjusted type
             vpc: props.vpc,
             internetFacing: true,
             securityGroup: scaleliteSg
         });
         const cert = Certificate.fromCertificateArn(this, 'ACMCert', props.certificateArn);
-        const listener = this.loadBalancer.addListener('HttpsListener', {
+        const listener = this.loadBalancer.addListener('HttpsListener', { // Adjusted type
             port: 443,
             certificates: [cert],
-            protocol: ApplicationProtocol.HTTPS,
+            protocol: elbv2.ApplicationProtocol.HTTPS, // Adjusted type
             open: true
         });
         listener.addTargets('ScaleliteTG', {
@@ -231,15 +229,15 @@ export class ScaleliteStack extends Stack {
         // 1. Scalelite ALB 5xx Errors Alarm
         this.scaleliteAlb5xxErrorsAlarm = new cloudwatch.Alarm(this, 'ScaleliteALB5xxErrorsAlarm', {
             alarmName: 'ScaleliteALB5xxErrorsAlarm',
-            alarmDescription: 'Triggers if the Scalelite ALB targets generate >= 5 HTTP 5xx errors in 5 minutes.', // Updated description
-            metric: this.loadBalancer.metricHttpCodeTarget(cloudwatch.HttpCodeTarget.ELB_5XX_COUNT, { // ELB_5XX_COUNT is correct for both HttpCodeTarget and HttpCodeElb enums for 5xx counts
+            alarmDescription: 'Triggers if the Scalelite ALB experiences >= 5 HTTP 5xx errors in 5 minutes.', // Reverted description
+            metric: this.loadBalancer.metricHttpCode(elbv2.HttpCode.ELB_5XX_COUNT, { // Changed to metricHttpCode and elbv2.HttpCode
                 period: Duration.minutes(5),
-                statistic: cloudwatch.Statistic.SUM,
+                statistic: cloudwatch.Statistic.SUM, // Preserved statistic
             }),
-            threshold: 5,
-            evaluationPeriods: 1,
-            comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            threshold: 5, // Preserved
+            evaluationPeriods: 1, // Preserved
+            comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD, // Preserved
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING, // Preserved
         });
 
         // 2. Scalelite ECS Fargate Service CPU Utilization Alarm
