@@ -6,7 +6,7 @@ import {
   MachineImage, UserData, LaunchTemplate, InterfaceVpcEndpointAwsService
 } from 'aws-cdk-lib/aws-ec2';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
-import { SpotMarketType } from 'aws-cdk-lib/aws-autoscaling';
+// Removed specific import for SpotMarketType as namespace import 'autoscaling' is used.
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
 import * as sns from 'aws-cdk-lib/aws-sns';
@@ -165,7 +165,7 @@ export class BbbClusterStack extends Stack {
 
     if (props.useSpotInstances) {
       (asgProps as any).instanceMarketOptions = {
-        marketType: SpotMarketType.SPOT,
+        marketType: autoscaling.SpotMarketType.SPOT, // Changed to use namespace
         // Optionally, set spotOptions for maxPrice, interruption behavior etc.
         // spotOptions: {
         //   maxPrice: '0.10', // Example: Set max hourly price
@@ -177,7 +177,7 @@ export class BbbClusterStack extends Stack {
       // to diversify across multiple instance types.
     }
 
-    const asg = new AutoScalingGroup(this, 'BBBASG', asgProps);
+    const asg = new autoscaling.AutoScalingGroup(this, 'BBBASG', asgProps); // Changed to use namespace
     props.sharedSecret.grantRead(asg.role); // Grant ASG role permission to read the secret
 
     // CPU-based target tracking scaling policy
@@ -280,7 +280,7 @@ export class BbbClusterStack extends Stack {
 
     asg.addLifecycleHook('TerminateHook', {
       lifecycleTransition: autoscaling.LifecycleTransition.INSTANCE_TERMINATING,
-      notificationTarget: new hookTargets.SnsTopic(lifecycleTopic),
+      notificationTarget: new hookTargets.SnsTopicTarget(lifecycleTopic), // Corrected to SnsTopicTarget
       defaultResult: autoscaling.DefaultResult.ABANDON, // Abandon if Lambda fails or times out
       heartbeatTimeout: Duration.minutes(5),
     });
