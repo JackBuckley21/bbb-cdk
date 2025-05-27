@@ -158,7 +158,7 @@ export class ScaleliteStack extends Stack {
         });
         listener.addTargets('ScaleliteTG', {
             port: 80,
-            targets: [ service.loadBalancerTarget({ containerName: 'api', containerPort: 80 }) ]
+            targets: [ this.service.loadBalancerTarget({ containerName: 'api', containerPort: 80 }) ]
         });
 
 
@@ -169,7 +169,7 @@ export class ScaleliteStack extends Stack {
         new ARecord(this, 'AliasRecord', {
             zone,
             recordName: subdomain,
-            target: RecordTarget.fromAlias(new LoadBalancerTarget(lb))
+            target: RecordTarget.fromAlias(new LoadBalancerTarget(this.loadBalancer))
         });
 
         // WAFv2 for ALB
@@ -231,8 +231,8 @@ export class ScaleliteStack extends Stack {
         // 1. Scalelite ALB 5xx Errors Alarm
         this.scaleliteAlb5xxErrorsAlarm = new cloudwatch.Alarm(this, 'ScaleliteALB5xxErrorsAlarm', {
             alarmName: 'ScaleliteALB5xxErrorsAlarm',
-            alarmDescription: 'Triggers if the Scalelite ALB experiences >= 5 HTTP 5xx errors in 5 minutes.',
-            metric: this.loadBalancer.metricHttpCodeElb(cloudwatch.HttpCodeElb.ELB_5XX_COUNT, {
+            alarmDescription: 'Triggers if the Scalelite ALB targets generate >= 5 HTTP 5xx errors in 5 minutes.', // Updated description
+            metric: this.loadBalancer.metricHttpCodeTarget(cloudwatch.HttpCodeTarget.ELB_5XX_COUNT, { // ELB_5XX_COUNT is correct for both HttpCodeTarget and HttpCodeElb enums for 5xx counts
                 period: Duration.minutes(5),
                 statistic: cloudwatch.Statistic.SUM,
             }),
@@ -245,7 +245,7 @@ export class ScaleliteStack extends Stack {
         // 2. Scalelite ECS Fargate Service CPU Utilization Alarm
         this.scaleliteServiceHighCPUAlarm = new cloudwatch.Alarm(this, 'ScaleliteServiceHighCPUAlarm', {
             alarmName: 'ScaleliteServiceHighCPUAlarm',
-            alarmDescription: 'Triggers if the Scalelite Fargate service average CPU utilization exceeds 85% for 15 minutes.',
+            alarmDescription: 'Triggers if the Scalelite Fargate service average CPU utilization exceeds 85% for 15 minutes.', // Note: This is a different alarm, ensure this is not unintentionally matched.
             metric: this.service.metricCpuUtilization({
                 period: Duration.minutes(5),
                 statistic: cloudwatch.Statistic.AVERAGE,
