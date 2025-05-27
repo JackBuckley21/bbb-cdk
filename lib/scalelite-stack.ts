@@ -229,8 +229,8 @@ export class ScaleliteStack extends Stack {
         // 1. Scalelite ALB 5xx Errors Alarm
         this.scaleliteAlb5xxErrorsAlarm = new cloudwatch.Alarm(this, 'ScaleliteALB5xxErrorsAlarm', {
             alarmName: 'ScaleliteALB5xxErrorsAlarm',
-            alarmDescription: 'Triggers if the Scalelite ALB experiences >= 5 HTTP 5xx errors in 5 minutes.', // Reverted description
-            metric: this.loadBalancer.metricHttpCode(elbv2.HttpCode.ELB_5XX_COUNT, { // Changed to metricHttpCode and elbv2.HttpCode
+            alarmDescription: 'Triggers if the Scalelite ALB experiences >= 5 HTTP 5xx errors in 5 minutes.', // Description remains
+            metric: this.loadBalancer.metricHttpCodeElb(elbv2.HttpCodeElb.ELB_5XX_COUNT, { // Corrected to metricHttpCodeElb and elbv2.HttpCodeElb
                 period: Duration.minutes(5),
                 statistic: cloudwatch.Statistic.SUM, // Preserved statistic
             }),
