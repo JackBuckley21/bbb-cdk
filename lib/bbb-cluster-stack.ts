@@ -5,8 +5,7 @@ import {
   InstanceType, InstanceClass, InstanceSize,
   MachineImage, UserData, LaunchTemplate, InterfaceVpcEndpointAwsService
 } from 'aws-cdk-lib/aws-ec2';
-import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
-// Removed specific import for SpotMarketType as namespace import 'autoscaling' is used.
+import { AutoScalingGroup, SpotMarketType, LifecycleTransition, DefaultResult, CpuUtilizationScalingProps } from 'aws-cdk-lib/aws-autoscaling';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
 import * as sns from 'aws-cdk-lib/aws-sns';
@@ -15,7 +14,7 @@ import * as lambda from 'aws-cdk-lib/aws-lambda'; // Keep for Runtime
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as path from 'node:path';
 import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
-import * as hookTargets from 'aws-cdk-lib/aws-autoscaling-hooktargets';
+import { SnsTopicTarget } from 'aws-cdk-lib/aws-autoscaling-hooktargets'; // Changed to direct import
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cw_actions from 'aws-cdk-lib/aws-cloudwatch-actions';
 
@@ -165,7 +164,7 @@ export class BbbClusterStack extends Stack {
 
     if (props.useSpotInstances) {
       (asgProps as any).instanceMarketOptions = {
-        marketType: autoscaling.SpotMarketType.SPOT, // Changed to use namespace
+        marketType: SpotMarketType.SPOT, // Reverted to direct import
         // Optionally, set spotOptions for maxPrice, interruption behavior etc.
         // spotOptions: {
         //   maxPrice: '0.10', // Example: Set max hourly price
@@ -177,7 +176,7 @@ export class BbbClusterStack extends Stack {
       // to diversify across multiple instance types.
     }
 
-    const asg = new autoscaling.AutoScalingGroup(this, 'BBBASG', asgProps); // Changed to use namespace
+    const asg = new AutoScalingGroup(this, 'BBBASG', asgProps); // Reverted to direct import
     props.sharedSecret.grantRead(asg.role); // Grant ASG role permission to read the secret
 
     // CPU-based target tracking scaling policy
@@ -279,9 +278,9 @@ export class BbbClusterStack extends Stack {
     deregisterLambda.addEventSource(new lambdaEventSources.SnsEventSource(lifecycleTopic));
 
     asg.addLifecycleHook('TerminateHook', {
-      lifecycleTransition: autoscaling.LifecycleTransition.INSTANCE_TERMINATING,
-      notificationTarget: new hookTargets.SnsTopicTarget(lifecycleTopic), // Corrected to SnsTopicTarget
-      defaultResult: autoscaling.DefaultResult.ABANDON, // Abandon if Lambda fails or times out
+      lifecycleTransition: LifecycleTransition.INSTANCE_TERMINATING, // Reverted to direct import
+      notificationTarget: new SnsTopicTarget(lifecycleTopic), // Reverted to direct import
+      defaultResult: DefaultResult.ABANDON, // Reverted to direct import
       heartbeatTimeout: Duration.minutes(5),
     });
 
