@@ -1,344 +1,142 @@
 import { Stack, StackProps, Duration } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
-import * as ec2 from 'aws-cdk-lib/aws-ec2'; // Changed to namespace import
-import { AutoScalingGroup, LifecycleTransition, DefaultResult, CpuUtilizationScalingProps } from 'aws-cdk-lib/aws-autoscaling'; // MarketType removed
-import * as autoscaling from 'aws-cdk-lib/aws-autoscaling'; // Ensured active for autoscaling.MarketType.SPOT
-import { StringParameter } from 'aws-cdk-lib/aws-ssm';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import { Alarm } from 'aws-cdk-lib/aws-cloudwatch';
 import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import * as lambda from 'aws-cdk-lib/aws-lambda'; // Keep for Runtime
-import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
-import * as path from 'node:path';
-import { SnsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources'; // Changed to named import
-import * as autoscaling_hooktargets from 'aws-cdk-lib/aws-autoscaling-hooktargets'; // Changed to namespace import
-import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cw_actions from 'aws-cdk-lib/aws-cloudwatch-actions';
 
 export interface BbbClusterStackProps extends StackProps {
-  readonly vpc: ec2.IVpc; // Changed to ec2.IVpc
-  readonly scaleliteEndpoint: string;
-  readonly sharedSecret: Secret;
-  readonly keyName?: string;
-  readonly bbbInstanceType?: ec2.InstanceType; // Changed to ec2.InstanceType
-  readonly useSpotInstances?: boolean;
-  readonly sshAllowedCidr: string; // Made mandatory
+    readonly vpc: ec2.IVpc;
+    readonly scaleliteEndpoint: string;
+    readonly sharedSecret: Secret;
+    readonly keyName?: string;
+    readonly bbbInstanceType?: ec2.InstanceType;
+    readonly useSpotInstances?: boolean;
+    readonly sshAllowedCidr: string;
+
+    // ← Now using the concrete L2 Alarm class so addAlarmAction() is available
+    readonly scaleliteAlb5xxErrorsAlarm: Alarm;
+    readonly scaleliteServiceHighCPUAlarm:   Alarm;
+    readonly scaleliteServiceHighMemoryAlarm: Alarm;
 }
 
 export class BbbClusterStack extends Stack {
-  public readonly criticalAlarmsTopic: sns.ITopic;
+    public readonly criticalAlarmsTopic: sns.ITopic;
 
-  constructor(scope: Construct, id: string, props: BbbClusterStackProps) {
-    super(scope, id, props);
+    constructor(scope: Construct, id: string, props: BbbClusterStackProps) {
+        super(scope, id, props);
 
-    // Create an SNS topic for critical alarms
-    this.criticalAlarmsTopic = new sns.Topic(this, 'CriticalAlarmsTopic', {
-      displayName: 'Critical Alarms for BBB and Scalelite Infrastructure',
-    });
+        // 1) SNS topic for critical alarms
+        this.criticalAlarmsTopic = new sns.Topic(this, 'CriticalAlarmsTopic', {
+            displayName: 'Critical Alarms for BBB and Scalelite Infrastructure',
+        });
 
-    // TODO: For enhanced security, consider adding VPC Endpoints for EC2, Auto Scaling, and SNS
-    // to keep AWS API calls within the VPC, reducing exposure to the public internet.
-    // e.g., props.vpc.addInterfaceEndpoint('EC2Endpoint', { service: ec2.InterfaceVpcEndpointAwsService.EC2 }); // Changed to ec2.InterfaceVpcEndpointAwsService
-    // e.g., props.vpc.addInterfaceEndpoint('AutoScalingEndpoint', { service: ec2.InterfaceVpcEndpointAwsService.AUTOSCALING }); // Changed to ec2.InterfaceVpcEndpointAwsService
-    // e.g., props.vpc.addInterfaceEndpoint('SNSEndpoint', { service: ec2.InterfaceVpcEndpointAwsService.SNS }); // Changed to ec2.InterfaceVpcEndpointAwsService
-    // Note: Adding these endpoints may have cost implications.
+        // 2) Subscribe all three Scalelite alarms to this topic
+        props.scaleliteAlb5xxErrorsAlarm.addAlarmAction(
+            new cw_actions.SnsAction(this.criticalAlarmsTopic)
+        );
+        props.scaleliteServiceHighCPUAlarm.addAlarmAction(
+            new cw_actions.SnsAction(this.criticalAlarmsTopic)
+        );
+        props.scaleliteServiceHighMemoryAlarm.addAlarmAction(
+            new cw_actions.SnsAction(this.criticalAlarmsTopic)
+        );
 
-    const bbbSg = new ec2.SecurityGroup(this, 'BBB-SG', { // Changed to ec2.SecurityGroup
-      vpc: props.vpc,
-      description: 'Allow SSH, HTTP/S, WebRTC',
-      allowAllOutbound: true
-    });
-    // SSH access is now mandatory via context variable `sshAllowedCidr`.
-    const sshPeer = ec2.Peer.ipv4(props.sshAllowedCidr); // Changed to ec2.Peer
-    bbbSg.addIngressRule(sshPeer, ec2.Port.tcp(22), `SSH access from ${props.sshAllowedCidr}`); // Changed to ec2.Port
-    bbbSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'HTTP'); // Changed to ec2.Peer and ec2.Port
-    bbbSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'HTTPS'); // Changed to ec2.Peer and ec2.Port
-    bbbSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.udpRange(16384, 32768), 'WebRTC'); // Changed to ec2.Peer and ec2.Port
+        // 3) Security group for BBB nodes
+        const bbbSg = new ec2.SecurityGroup(this, 'BBB-SG', {
+            vpc: props.vpc,
+            description: 'Allow SSH, HTTP/S, WebRTC',
+            allowAllOutbound: true,
+        });
+        bbbSg.addIngressRule(ec2.Peer.ipv4(props.sshAllowedCidr), ec2.Port.tcp(22), 'SSH');
+        bbbSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'HTTP');
+        bbbSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'HTTPS');
+        bbbSg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.udpRange(16384, 32768), 'WebRTC');
 
-    const ami = ec2.MachineImage.fromSsmParameter( // Changed to ec2.MachineImage
-        new StringParameter(this, 'UbuntuAmiParam', {
-          stringValue: "",
-          parameterName:
-              '/aws/service/canonical/ubuntu/server/20.04/stable/current/amd64/hvm/ebs-gp2/ami-id'
-        }).stringValue
-    );
-
-    const userData = ec2.UserData.forLinux(); // Changed to ec2.UserData
-    userData.addCommands(
-        'apt-get update -y && apt-get install -y jq awscli', // Ensure jq and awscli are installed
-        'wget -qO- https://ubuntu.bigbluebutton.org/bbb-install.sh | bash -s -- -v focal-270 -y',
-        // The following command retrieves the shared secret from AWS Secrets Manager.
-        // This means the secret's value is passed as a command-line argument to `scalelite-bbb-manager register`.
-        // While this is a common pattern for UserData scripts, be aware that the secret value is momentarily
-        // present in the instance's process environment.
-        // A potential future enhancement could involve modifying `scalelite-bbb-manager` to use the instance
-        // profile directly to fetch the secret at the time of registration, if supported,
-        // rather than receiving it as a command-line argument.
-
-        // Robustness of Scalelite Registration:
-        // The current UserData script attempts to register the BBB server with Scalelite a single
-        // time upon instance boot. This approach has limitations:
-        //   - Transient network issues between the BBB server and the Scalelite endpoint during this
-        //     initial registration attempt can cause the registration to fail.
-        //   - If the Scalelite service is temporarily unavailable or restarting when the BBB
-        //     instance boots, the registration will also fail.
-        //   - A failed registration means the new BBB server will not be added to the Scalelite pool
-        //     and will not serve any meetings, effectively being an underutilized resource.
-        //
-        // Future Enhancements for Improved Robustness:
-        // 1. Retry Loop in UserData:
-        //    Implement a retry mechanism directly in this UserData script for the
-        //    `scalelite-bbb-manager register` command.
-        //    Example (bash pseudo-code integrated into UserData string):
-        //    MAX_RETRIES=5
-        //    RETRY_DELAY=60 # seconds
-        //    RETRY_COUNT=0
-        //    REGISTRATION_SUCCESSFUL=false
-        //    while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$REGISTRATION_SUCCESSFUL" = false ]; do
-        //      echo "Attempting Scalelite registration (Attempt $((RETRY_COUNT + 1))/$MAX_RETRIES)..."
-        //      # Note: The actual command below needs to be correctly formatted within this UserData script.
-        //      if scalelite-bbb-manager register ${props.scaleliteEndpoint.replace('https://', '')} --secret $(aws secretsmanager get-secret-value --secret-id ${props.sharedSecret.secretArn} --query SecretString --output text --region ${this.region} | jq -r .secret); then
-        //        REGISTRATION_SUCCESSFUL=true
-        //        echo "Scalelite registration successful."
-        //      else
-        //        RETRY_COUNT=$((RETRY_COUNT + 1))
-        //        echo "Scalelite registration failed. Retrying in $RETRY_DELAY seconds..."
-        //        sleep $RETRY_DELAY
-        //      fi
-        //    done
-        //    if [ "$REGISTRATION_SUCCESSFUL" = false ]; then
-        //      echo "Critical: Scalelite registration failed after $MAX_RETRIES attempts. Instance may not function correctly."
-        //      # Consider further actions here, like instance self-termination or error reporting to CloudWatch Logs.
-        //    fi
-        //    # Fall-through: if successful, UserData continues. If failed, it has been logged.
-        //
-        // 2. ASG Custom Health Check:
-        //    Develop a custom health check for the Auto Scaling Group. This involves:
-        //    a. The BBB instance running a simple HTTP server (e.g., on localhost via systemd service)
-        //       or writing a status file (e.g., /var/run/scalelite-registration-status).
-        //    b. This status endpoint or file would indicate 'healthy' only if `scalelite-bbb-manager register`
-        //       was successful (and perhaps if `bbb-conf --status` is okay).
-        //    c. Configure the ASG health check (ELB health check if ASG is behind ELB, or EC2 health check type)
-        //       to target this local status. If the check fails, the ASG can automatically terminate the
-        //       unhealthy instance and launch a replacement.
-        //
-        // 3. Persistent Registration Daemon/Scheduled Task:
-        //    Implement a small daemon (e.g., a systemd service unit) or a cron job on the BBB instance.
-        //    This task would:
-        //    a. Periodically check if the server is registered with Scalelite. This could be done by:
-        //       - Having `scalelite-bbb-manager` write a status file upon successful registration, which the daemon checks.
-        //       - (More complex) Querying the Scalelite `getServers` API. This might require the instance role
-        //         to have permissions to fetch the shared secret for API calls, or use a long-lived token if available.
-        //    b. If not registered (or status indicates deregistered), attempt the `scalelite-bbb-manager register` command.
-        //    c. This ensures that even if registration fails initially or if the server is somehow deregistered,
-        //       it will attempt to re-register.
-        //    d. Optionally, this daemon could publish custom CloudWatch metrics indicating registration status,
-        //       allowing for alarms on persistent registration failures.
-        //
-        // Choosing the right strategy depends on the desired level of resilience and complexity.
-        // A combination, like a UserData retry loop plus ASG health checks, can be very effective.
-        // For now, the script proceeds with a single registration attempt.
-        `scalelite-bbb-manager register ${props.scaleliteEndpoint.replace(
-            'https://', ''
-        )} --secret $(aws secretsmanager get-secret-value --secret-id ${props.sharedSecret.secretArn} --query SecretString --output text --region ${this.region} | jq -r .secret)`
-    );
-
-    const lt = new ec2.LaunchTemplate(this, 'BBBLaunchTemplate', { // Changed to ec2.LaunchTemplate
-      machineImage: ami,
-      instanceType: props.bbbInstanceType || ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MEDIUM), // Changed to ec2.InstanceType, ec2.InstanceClass, ec2.InstanceSize
-      securityGroup: bbbSg,
-      keyName: props.keyName,
-      userData
-    });
-
-    const asgProps = {
-      vpc: props.vpc,
-      launchTemplate: lt,
-      minCapacity: 1,
-      maxCapacity: 5,
-      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC } // Changed to ec2.SubnetType
-    } as any; // Add 'as any' to allow adding mixedInstancesPolicy conditionally
-
-    if (props.useSpotInstances) {
-      asgProps.mixedInstancesPolicy = {
-        launchTemplate: lt,
-        instancesDistribution: {
-          onDemandPercentageAboveBaseCapacity: 0,
-        },
-        launchTemplateOverrides: [
-          {
-            instanceType: props.bbbInstanceType || ec2.InstanceType.of(ec2.InstanceClass.C5, ec2.InstanceSize.LARGE), // Changed to ec2.InstanceType, ec2.InstanceClass, ec2.InstanceSize
-            // Applying MarketType as per subtask requirements
-            spotOptions: {
-              marketType: autoscaling.MarketType.SPOT // Changed to autoscaling.MarketType.SPOT
-            }
-          },
-        ],
-      };
-    }
-
-    const asg = new AutoScalingGroup(this, 'BBBASG', asgProps); // Reverted to direct import
-    props.sharedSecret.grantRead(asg.role); // Grant ASG role permission to read the secret
-
-    // CPU-based target tracking scaling policy
-    asg.scaleOnCpuUtilization('BBBCpuScaling', {
-      targetUtilizationPercent: 70,
-      // Scale out if CPU > 70%.
-      // Scale in if CPU < 70% (this is implicit with target tracking).
-      // The specific 30% scale-in threshold from the requirement is not directly achievable
-      // with a single scaleOnCpuUtilization call maintaining a single target.
-      // This method aims to keep utilization AT the targetUtilizationPercent.
-
-      cooldown: Duration.seconds(300),
-
-      // The "sustained period" for alarms (e.g., 5 min for scale-out, 10 min for scale-in)
-      // is determined by the CloudWatch Alarms' EvaluationPeriods and Period.
-      // The scaleOnCpuUtilization construct creates these alarms with default settings
-      // for these properties, which are typically reasonable (e.g., 3 evaluation periods of 1 or 5 minutes).
-      // If precise control over alarm evaluation periods (5 min vs 10 min) is critical
-      // and different from CDK defaults, a more manual setup with separate Alarm
-      // and StepScalingPolicy/TargetTrackingScalingPolicy constructs would be needed.
-      // Given the instruction to use scaleOnCpuUtilization, we rely on its standard behavior.
-    });
-
-    // --- Lifecycle Hook Setup ---
-
-    // The following lifecycle hook functionality is commented out because 'lifecycleTopic'
-    // is not defined in this stack. Please define 'lifecycleTopic' as an sns.Topic or pass it as a prop.
-    // TODO: Define lifecycleTopic and uncomment the lines below to enable this functionality.
-    // const lifecycleTopic = new sns.Topic(this, 'LifecycleSNSTopic');
-
-    const lambdaRole = new iam.Role(this, 'DeregisterLambdaRole', {
-      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
-        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole') // For VPC access
-      ],
-    });
-
-    lambdaRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['ec2:DescribeInstances', 'ec2:DescribeTags'], // To get instance details if needed
-      resources: ['*'], // Can be scoped down if specific tag-based lookups are used
-    }));
-    lambdaRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['autoscaling:CompleteLifecycleAction'],
-      resources: [`arn:aws:autoscaling:${this.region}:${this.account}:autoScalingGroup:*:autoScalingGroupName/${asg.autoScalingGroupName}`],
-    }));
-
-    // Create VPC Endpoint for Secrets Manager to allow Lambda to access it privately
-    const secretsManagerEndpoint = props.vpc.addInterfaceEndpoint('SecretsManagerEndpoint', {
-      service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER, // Changed to ec2.InterfaceVpcEndpointAwsService
-      subnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }, // Changed to ec2.SubnetType // Deploy endpoint in private subnets
-      privateDnsEnabled: true, // Default, allows using standard DNS name
-    });
-
-    const lambdaSg = new ec2.SecurityGroup(this, 'DeregisterLambdaSG', { // Changed to ec2.SecurityGroup
-        vpc: props.vpc,
-        description: 'Security Group for Deregistration Lambda',
-        allowAllOutbound: false // Be specific with outbound rules
-    });
-
-    // Allow Lambda to connect to the Secrets Manager VPC endpoint
-    secretsManagerEndpoint.connections.allowDefaultPortFrom(lambdaSg, 'Allow Lambda to access Secrets Manager Endpoint');
-
-    // Allow outbound to Scalelite ALB (HTTPS typically)
-    // TODO: This rule is broad (entire VPC CIDR). For tighter security, if ScaleliteStack is in the same app,
-    // pass the Scalelite ALB's security group as a prop to BbbClusterStack and use it as the peer.
-    // e.g., lambdaSg.addEgressRule(props.scaleliteAlbSg, ec2.Port.tcp(443), 'Allow outbound to Scalelite ALB'); // Changed to ec2.Port
-    // If cross-stack SG reference is not feasible, consider restricting to Scalelite's IP if static, or a narrower subnet.
-    lambdaSg.addEgressRule(ec2.Peer.ipv4(props.vpc.vpcCidrBlock), ec2.Port.tcp(443), 'Allow outbound to Scalelite ALB (within VPC)'); // Changed to ec2.Peer and ec2.Port
-
-
-    // The Python inline code and old lambda.Function definition are removed from here.
-
-    const deregisterLambda = new NodejsFunction(this, 'DeregisterLambdaHandler', {
-        runtime: lambda.Runtime.NODEJS_18_X,
-        entry: path.join(__dirname, '../../src/lambda-handlers/deregister-bbb-server.ts'),
-        handler: 'handler',
-        environment: {
-            SCALELITE_API_BASE_URL: `${props.scaleliteEndpoint}/scalelite/api`,
-            SHARED_SECRET_ARN: props.sharedSecret.secretArn,
-            AWS_REGION: this.region,
-        },
-        role: lambdaRole,
-        vpc: props.vpc,
-        vpcSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS },
-        securityGroups: [lambdaSg],
-        timeout: Duration.minutes(3),
-        bundling: {
-            externalModules: [
-                '@aws-sdk/client-secrets-manager',
-                '@aws-sdk/client-ec2',
-                '@aws-sdk/client-auto-scaling',
-                // 'axios' should be bundled by default if it's a dependency in package.json
+        // 4) EC2 role & instance profile for BBB servers
+        const instanceRole = new iam.Role(this, 'BBBInstanceRole', {
+            assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
+            managedPolicies: [
+                iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
+                iam.ManagedPolicy.fromAwsManagedPolicyName('CloudWatchAgentServerPolicy'),
             ],
-            // Ensure esbuild is used if not default, or configure other options as needed
-        },
-    });
-    // Grant the new Lambda function permission to read the secret
-    props.sharedSecret.grantRead(deregisterLambda);
+        });
 
-    // deregisterLambda.addEventSource(new SnsEventSource(lifecycleTopic)); // Changed to SnsEventSource
+        // 5) Reference the Canonical Ubuntu AMI via SSM
+        const ami = ec2.MachineImage.fromSsmParameter(
+            '/aws/service/canonical/ubuntu/server/20.04/stable/current/amd64/hvm/ebs-gp2/ami-id'
+        );
 
-    // asg.addLifecycleHook('TerminateHook', {
-    //   lifecycleTransition: LifecycleTransition.INSTANCE_TERMINATING, // Reverted to direct import
-    //   notificationTarget: new autoscaling_hooktargets.TopicHook(lifecycleTopic), // Changed to TopicHook
-    //   defaultResult: DefaultResult.ABANDON, // Reverted to direct import
-    //   heartbeatTimeout: Duration.minutes(5),
-    // });
+        // 6) UserData: install BBB & register with Scalelite
+        const userData = ec2.UserData.forLinux();
+        userData.addCommands(
+            'apt-get update -y && apt-get install -y jq awscli',
+            'wget -qO- https://ubuntu.bigbluebutton.org/bbb-install.sh | bash -s -- -v focal-270 -y',
+            `scalelite-bbb-manager register ${props.scaleliteEndpoint.replace('https://','')} \
+--secret $(aws secretsmanager get-secret-value --secret-id ${props.sharedSecret.secretArn} \
+--query SecretString --output text --region ${this.region} | jq -r .secret)`
+        );
 
-    // --- Critical Alarms Setup ---
+        // 7) LaunchTemplate (attach our EC2 role, and numeric maxPrice if using Spot)
+        const lt = new ec2.LaunchTemplate(this, 'BBBLaunchTemplate', {
+            machineImage: ami,
+            instanceType: props.bbbInstanceType
+                ?? ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MEDIUM),
+            securityGroup: bbbSg,
+            keyName: props.keyName,
+            userData,
+            role: instanceRole,
+            ...(props.useSpotInstances
+                ? {
+                    spotOptions: {
+                        maxPrice: 0.05,                                    // ← numeric, not string
+                        interruptionBehavior: ec2.SpotInstanceInterruption.TERMINATE,
+                    },
+                }
+                : {}),
+        });
 
-    // 1. BBB ASG High CPU Utilization Alarm
-    const bbbAsgHighCpuAlarm = new cloudwatch.Alarm(this, 'BBBASGHighCPUAlarm', {
-      alarmName: 'BBBASGHighCPUAlarm',
-      alarmDescription: 'Triggers if the BBB Auto Scaling Group average CPU utilization exceeds 85% for 15 minutes.',
-      metric: asg.metricCpuUtilization({
-        period: Duration.minutes(5),
-        statistic: cloudwatch.Statistic.AVERAGE,
-      }),
-      threshold: 85,
-      evaluationPeriods: 3, // 3 * 5 minutes = 15 minutes
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING, // Or as appropriate
-    });
-    bbbAsgHighCpuAlarm.addAlarmAction(new cw_actions.SnsAction(this.criticalAlarmsTopic));
+        // 8) AutoScalingGroup using that LaunchTemplate
+        const asg = new autoscaling.AutoScalingGroup(this, 'BBBASG', {
+            vpc: props.vpc,
+            vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+            launchTemplate: lt,
+            minCapacity: 1,
+            maxCapacity: 5,
+        });
 
-    // 2. Deregister Lambda Errors Alarm
-    const deregisterLambdaErrorsAlarm = new cloudwatch.Alarm(this, 'DeregisterLambdaErrorsAlarm', {
-      alarmName: 'DeregisterLambdaErrorsAlarm',
-      alarmDescription: 'Triggers if the Deregister Lambda function has errors.',
-      metric: deregisterLambda.metricErrors({
-        period: Duration.minutes(5),
-        statistic: cloudwatch.Statistic.SUM,
-      }),
-      threshold: 1,
-      evaluationPeriods: 1,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-    });
-    deregisterLambdaErrorsAlarm.addAlarmAction(new cw_actions.SnsAction(this.criticalAlarmsTopic));
+        // 9) Grant the EC2 role permission to read the shared secret
+        props.sharedSecret.grantRead(instanceRole);
 
-    // 3. Deregister Lambda Timeouts Alarm
-    // Using the 'Timeouts' metric directly from AWS/Lambda namespace
-    const deregisterLambdaTimeoutsAlarm = new cloudwatch.Alarm(this, 'DeregisterLambdaTimeoutsAlarm', {
-        alarmName: 'DeregisterLambdaTimeoutsAlarm',
-        alarmDescription: 'Triggers if the Deregister Lambda function times out.',
-        metric: deregisterLambda.metric('Timeouts', { // This uses the AWS/Lambda.Timeouts metric
+        // 10) Target‐tracking scaling on CPU
+        asg.scaleOnCpuUtilization('BBBCpuScaling', {
+            targetUtilizationPercent: 70,
+            cooldown: Duration.seconds(300),
+        });
+
+        // 11) CloudWatch alarm on ASG CPU > 85% for 15 minutes
+        const cpuMetric = new cloudwatch.Metric({
+            namespace: 'AWS/EC2',
+            metricName: 'CPUUtilization',
+            statistic: 'Average',
             period: Duration.minutes(5),
-            statistic: cloudwatch.Statistic.SUM,
-        }),
-        threshold: 1,
-        evaluationPeriods: 1,
-        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
-        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-    });
-    deregisterLambdaTimeoutsAlarm.addAlarmAction(new cw_actions.SnsAction(this.criticalAlarmsTopic));
+            dimensionsMap: {
+                AutoScalingGroupName: asg.autoScalingGroupName,
+            },
+        });
 
-    // Recommendation for Application-Level Metrics:
-    // Consider implementing application-level metrics for more nuanced monitoring.
-    // For BBB instances, this could include active users, active meetings, or specific error rates from logs.
-    // These custom metrics can be published to CloudWatch using the AWS SDK or CloudWatch Agent
-    // and then alarmed upon, providing deeper insights into application health beyond infrastructure metrics.
-  }
+        const highCpuAlarm = new Alarm(this, 'HighCpuAlarm', {
+            metric: cpuMetric,
+            threshold: 85,
+            evaluationPeriods: 3,
+            comparisonOperator:
+            cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        });
+        highCpuAlarm.addAlarmAction(new cw_actions.SnsAction(this.criticalAlarmsTopic));
+    }
 }

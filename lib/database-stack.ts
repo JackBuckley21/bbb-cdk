@@ -1,7 +1,9 @@
 import { Stack, StackProps } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import {
-    IVpc, SubnetType, SecurityGroup, Peer, Port
+    IVpc,
+    SubnetType,
+    SecurityGroup
 } from 'aws-cdk-lib/aws-ec2';
 import {
     DatabaseCluster,
@@ -26,6 +28,7 @@ export class DatabaseStack extends Stack {
     constructor(scope: Construct, id: string, props: DatabaseStackProps) {
         super(scope, id, props);
 
+        // 1) Shared secret for Scalelite
         this.sharedSecret = new Secret(this, 'SharedSecret', {
             secretName: 'scalelite-shared-secret',
             generateSecretString: {
@@ -34,6 +37,7 @@ export class DatabaseStack extends Stack {
             }
         });
 
+        // 2) Aurora MySQL cluster
         this.dbCluster = new DatabaseCluster(this, 'ScaleliteDB', {
             engine: DatabaseClusterEngine.auroraMysql({
                 version: AuroraMysqlEngineVersion.VER_2_10_0
@@ -47,9 +51,12 @@ export class DatabaseStack extends Stack {
             }
         });
 
+        // 3) Redis subnet group + cluster
         const subnetGroup = new CfnSubnetGroup(this, 'RedisSubnetGroup', {
             description: 'Subnet group for Scalelite Redis',
-            subnetIds: props.vpc.selectSubnets({ subnetType: SubnetType.PRIVATE_WITH_EGRESS }).subnetIds,
+            subnetIds: props.vpc
+                .selectSubnets({ subnetType: SubnetType.PRIVATE_WITH_EGRESS })
+                .subnetIds,
             cacheSubnetGroupName: 'scalelite-redis-subnets'
         });
 
@@ -58,7 +65,6 @@ export class DatabaseStack extends Stack {
             description: 'Security Group for Scalelite Redis',
             allowAllOutbound: true
         });
-        // Ingress rule will be added by ScaleliteStack
 
         const redis = new CfnCacheCluster(this, 'ScaleliteRedis', {
             engine: 'redis',
@@ -67,7 +73,6 @@ export class DatabaseStack extends Stack {
             cacheSubnetGroupName: subnetGroup.cacheSubnetGroupName,
             vpcSecurityGroupIds: [this.redisSg.securityGroupId]
         });
-
         this.redisEndpoint = redis.attrRedisEndpointAddress;
     }
 }
