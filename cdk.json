@@ -96,6 +96,6 @@
     "domainName": "bbb-dev.finbogo.com",
     "certificateArn": "arn:aws:acm:eu-west-2:590183973724:certificate/26195c80-8378-4eb1-a2dd-a77cec8bf3aa",
     "bbbKeyName": "BBB-key",
-    "sshAllowedCidr": "109.180.75.148/32"
+    "sshAllowedCidr": "46.37.52.109/32"
   }
 }
