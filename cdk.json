@@ -92,8 +92,8 @@
     "@aws-cdk/s3-notifications:addS3TrustKeyPolicyForSnsSubscriptions": true,
     "@aws-cdk/aws-ec2:requirePrivateSubnetsForEgressOnlyInternetGateway": true,
     "@aws-cdk/aws-s3:publicAccessBlockedByDefault": true,
-    "vpcName": "VPCStack-dev",
-    "domainName": "meet.dev.finbogo.com",
+    "vpcName": "VPCStack-dev/VPC-dev",
+    "domainName": "bbb-dev.finbogo.com",
     "certificateArn": "arn:aws:acm:eu-west-2:590183973724:certificate/f32f55ca-d4d8-42f1-969c-9845e7fa2f8c",
     "bbbKeyName": "BBB-key",
     "sshAllowedCidr": "109.180.75.148/32"

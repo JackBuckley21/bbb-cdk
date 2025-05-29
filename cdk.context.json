@@ -1,1 +1,50 @@
-{}
+{
+  "vpc-provider:account=590183973724:filter.tag:Name=VPCStack-dev/VPC-dev:region=eu-west-2:returnAsymmetricSubnets=true": {
+    "vpcId": "vpc-0a35eb23378241373",
+    "vpcCidrBlock": "10.0.0.0/19",
+    "ownerAccountId": "590183973724",
+    "availabilityZones": [],
+    "subnetGroups": [
+      {
+        "name": "PublicSubnet-dev",
+        "type": "Public",
+        "subnets": [
+          {
+            "subnetId": "subnet-0da06b1592bdbec6c",
+            "cidr": "10.0.0.0/22",
+            "availabilityZone": "eu-west-2a",
+            "routeTableId": "rtb-01f46cd7cfd89e81b"
+          },
+          {
+            "subnetId": "subnet-0c94664267e2a1c52",
+            "cidr": "10.0.4.0/22",
+            "availabilityZone": "eu-west-2b",
+            "routeTableId": "rtb-0ac7134120a7ee852"
+          }
+        ]
+      },
+      {
+        "name": "PrivateSubnet-dev",
+        "type": "Private",
+        "subnets": [
+          {
+            "subnetId": "subnet-0d78a8fdf5de7ec49",
+            "cidr": "10.0.8.0/22",
+            "availabilityZone": "eu-west-2a",
+            "routeTableId": "rtb-07f3790a7165f03b3"
+          },
+          {
+            "subnetId": "subnet-07369e47b37eebe99",
+            "cidr": "10.0.12.0/22",
+            "availabilityZone": "eu-west-2b",
+            "routeTableId": "rtb-0fa718e532ce2c282"
+          }
+        ]
+      }
+    ]
+  },
+  "hosted-zone:account=590183973724:domainName=bbb-dev.finbogo.com:region=eu-west-2": {
+    "Id": "/hostedzone/Z0354621D18OK1AK0LYK",
+    "Name": "bbb-dev.finbogo.com."
+  }
+}
