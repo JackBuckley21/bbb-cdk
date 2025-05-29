@@ -40,7 +40,7 @@ export class DatabaseStack extends Stack {
         // 2) Aurora MySQL cluster
         this.dbCluster = new DatabaseCluster(this, 'ScaleliteDB', {
             engine: DatabaseClusterEngine.auroraMysql({
-                version: AuroraMysqlEngineVersion.VER_2_10_0
+                version: AuroraMysqlEngineVersion.VER_2_11_1
             }),
             credentials: Credentials.fromGeneratedSecret('scalelite_admin'),
             instances: 2,

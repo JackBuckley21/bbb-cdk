@@ -94,7 +94,7 @@
     "@aws-cdk/aws-s3:publicAccessBlockedByDefault": true,
     "vpcName": "VPCStack-dev/VPC-dev",
     "domainName": "bbb-dev.finbogo.com",
-    "certificateArn": "arn:aws:acm:eu-west-2:590183973724:certificate/f32f55ca-d4d8-42f1-969c-9845e7fa2f8c",
+    "certificateArn": "arn:aws:acm:eu-west-2:590183973724:certificate/26195c80-8378-4eb1-a2dd-a77cec8bf3aa",
     "bbbKeyName": "BBB-key",
     "sshAllowedCidr": "109.180.75.148/32"
   }
