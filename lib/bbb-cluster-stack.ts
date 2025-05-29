@@ -18,7 +18,6 @@ export interface BbbClusterStackProps extends StackProps {
     readonly useSpotInstances?: boolean;
     readonly sshAllowedCidr: string;
 
-    // ← Now using the concrete L2 Alarm class so addAlarmAction() is available
     readonly scaleliteAlb5xxErrorsAlarm: Alarm;
     readonly scaleliteServiceHighCPUAlarm:   Alarm;
     readonly scaleliteServiceHighMemoryAlarm: Alarm;
@@ -93,7 +92,7 @@ export class BbbClusterStack extends Stack {
             ...(props.useSpotInstances
                 ? {
                     spotOptions: {
-                        maxPrice: 0.05,                                    // ← numeric, not string
+                        maxPrice: 0.05,
                         interruptionBehavior: ec2.SpotInstanceInterruption.TERMINATE,
                     },
                 }
